@@ -2,7 +2,6 @@ tensorboardX
 tqdm
 easydict
 prettytable
-chumpy
 opencv-python
 imageio-ffmpeg
 roma

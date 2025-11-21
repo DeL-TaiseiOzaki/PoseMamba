@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES=2 python train.py \
+CUDA_VISIBLE_DEVICES=0 python train.py \
   --config checkpoint/pose3d/PoseMamba_B/config.yaml \
   --evaluate checkpoint/pose3d/PoseMamba_B/best_epoch.bin \
   --checkpoint eval/checkpoint

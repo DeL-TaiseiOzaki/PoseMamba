@@ -1,4 +1,11 @@
 import torch
+import sys
+import os
+
+# Add selective_scan kernel path to allow importing the CUDA modules
+_kernel_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'kernels', 'selective_scan')
+if _kernel_path not in sys.path:
+    sys.path.insert(0, _kernel_path)
 
 # pytorch cross scan =============
 class CrossScan(torch.autograd.Function):
@@ -320,26 +327,30 @@ class CrossMerge_Ab_1direction(torch.autograd.Function):
 
 
 # import selective scan ==============================
+# Try importing the modules, set to None if they fail
 try:
     import selective_scan_cuda_oflex
+    print(f"Successfully imported selective_scan_cuda_oflex: {selective_scan_cuda_oflex}", flush=True)
 except Exception as e:
-    ...
-    # print(f"WARNING: can not import selective_scan_cuda_oflex.", flush=True)
-    # print(e, flush=True)
+    selective_scan_cuda_oflex = None
+    print(f"WARNING: can not import selective_scan_cuda_oflex.", flush=True)
+    print(f"Error: {e}", flush=True)
 
 try:
     import selective_scan_cuda_core
+    print(f"Successfully imported selective_scan_cuda_core: {selective_scan_cuda_core}", flush=True)
 except Exception as e:
-    ...
+    selective_scan_cuda_core = None
     print(f"WARNING: can not import selective_scan_cuda_core.", flush=True)
     print(e, flush=True)
 
 try:
     import selective_scan_cuda
+    print(f"Successfully imported selective_scan_cuda: {selective_scan_cuda}", flush=True)
 except Exception as e:
-    ...
-    # print(f"WARNING: can not import selective_scan_cuda.", flush=True)
-    # print(e, flush=True)
+    selective_scan_cuda = None
+    print(f"WARNING: can not import selective_scan_cuda.", flush=True)
+    print(f"Error: {e}", flush=True)
 
 
 def check_nan_inf(tag: str, x: torch.Tensor, enable=True):
@@ -437,15 +448,15 @@ def print_jit_input_names(inputs):
 # comment all checks if inside cross_selective_scan
 class SelectiveScanMamba(torch.autograd.Function):
     @staticmethod
-    @torch.cuda.amp.custom_fwd
+    @torch.amp.custom_fwd(device_type='cuda')
     def forward(ctx, u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=False, nrows=1, backnrows=1, oflex=True):
         ctx.delta_softplus = delta_softplus
         out, x, *rest = selective_scan_cuda.fwd(u, delta, A, B, C, D, None, delta_bias, delta_softplus)
         ctx.save_for_backward(u, delta, A, B, C, D, delta_bias, x)
         return out
-    
+
     @staticmethod
-    @torch.cuda.amp.custom_bwd
+    @torch.amp.custom_bwd(device_type='cuda')
     def backward(ctx, dout, *args):
         u, delta, A, B, C, D, delta_bias, x = ctx.saved_tensors
         if dout.stride(-1) != 1:
@@ -460,36 +471,52 @@ class SelectiveScanMamba(torch.autograd.Function):
 
 class SelectiveScanCore(torch.autograd.Function):
     @staticmethod
-    @torch.cuda.amp.custom_fwd
+    @torch.amp.custom_fwd(device_type='cuda')
     def forward(ctx, u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=False, nrows=1, backnrows=1, oflex=True):
         ctx.delta_softplus = delta_softplus
-        out, x, *rest = selective_scan_cuda_core.fwd(u, delta, A, B, C, D, delta_bias, delta_softplus, 1)
+        # Fallback to oflex implementation if core is not available
+        if selective_scan_cuda_core is not None and hasattr(selective_scan_cuda_core, 'fwd'):
+            out, x, *rest = selective_scan_cuda_core.fwd(u, delta, A, B, C, D, delta_bias, delta_softplus, 1)
+        elif selective_scan_cuda_oflex is not None and hasattr(selective_scan_cuda_oflex, 'fwd'):
+            out, x, *rest = selective_scan_cuda_oflex.fwd(u, delta, A, B, C, D, delta_bias, delta_softplus, 1, oflex)
+        else:
+            raise RuntimeError(f"Neither selective_scan_cuda_core nor selective_scan_cuda_oflex is available. "
+                             f"core={selective_scan_cuda_core}, oflex={selective_scan_cuda_oflex}")
         ctx.save_for_backward(u, delta, A, B, C, D, delta_bias, x)
         return out
-    
+
     @staticmethod
-    @torch.cuda.amp.custom_bwd
+    @torch.amp.custom_bwd(device_type='cuda')
     def backward(ctx, dout, *args):
         u, delta, A, B, C, D, delta_bias, x = ctx.saved_tensors
         if dout.stride(-1) != 1:
             dout = dout.contiguous()
-        du, ddelta, dA, dB, dC, dD, ddelta_bias, *rest = selective_scan_cuda_core.bwd(
-            u, delta, A, B, C, D, delta_bias, dout, x, ctx.delta_softplus, 1
-        )
+        # Fallback to oflex implementation if core is not available
+        if selective_scan_cuda_core is not None and hasattr(selective_scan_cuda_core, 'bwd'):
+            du, ddelta, dA, dB, dC, dD, ddelta_bias, *rest = selective_scan_cuda_core.bwd(
+                u, delta, A, B, C, D, delta_bias, dout, x, ctx.delta_softplus, 1
+            )
+        elif selective_scan_cuda_oflex is not None and hasattr(selective_scan_cuda_oflex, 'bwd'):
+            du, ddelta, dA, dB, dC, dD, ddelta_bias, *rest = selective_scan_cuda_oflex.bwd(
+                u, delta, A, B, C, D, delta_bias, dout, x, ctx.delta_softplus, 1
+            )
+        else:
+            raise RuntimeError(f"Neither selective_scan_cuda_core nor selective_scan_cuda_oflex is available. "
+                             f"core={selective_scan_cuda_core}, oflex={selective_scan_cuda_oflex}")
         return (du, ddelta, dA, dB, dC, dD, ddelta_bias, None, None, None, None)
 
 
 class SelectiveScanOflex(torch.autograd.Function):
     @staticmethod
-    @torch.cuda.amp.custom_fwd
+    @torch.amp.custom_fwd(device_type='cuda')
     def forward(ctx, u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=False, nrows=1, backnrows=1, oflex=True):
         ctx.delta_softplus = delta_softplus
         out, x, *rest = selective_scan_cuda_oflex.fwd(u, delta, A, B, C, D, delta_bias, delta_softplus, 1, oflex)
         ctx.save_for_backward(u, delta, A, B, C, D, delta_bias, x)
         return out
-    
+
     @staticmethod
-    @torch.cuda.amp.custom_bwd
+    @torch.amp.custom_bwd(device_type='cuda')
     def backward(ctx, dout, *args):
         u, delta, A, B, C, D, delta_bias, x = ctx.saved_tensors
         if dout.stride(-1) != 1:

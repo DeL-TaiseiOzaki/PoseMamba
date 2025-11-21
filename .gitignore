@@ -1,0 +1,10 @@
+
+checkpoint/pose3d/PoseMamba_L/best_epoch.bin
+demo/output/
+demo/tj_cut/
+demo/lib/checkpoint/
+demo/video/st1.mp4
+
+.venv/
+__pycache__/
+PoseMamba_L.bin

@@ -214,7 +214,8 @@ def get_pose3D(args, video_path, output_dir):
         model_backbone = model_backbone.cuda()
 
     print('Loading checkpoint', args.evaluate)
-    checkpoint = torch.load(args.evaluate, map_location=lambda storage, loc: storage)
+    # PyTorch 2.6+ requires weights_only=False for checkpoints with numpy objects
+    checkpoint = torch.load(args.evaluate, map_location=lambda storage, loc: storage, weights_only=False)
     model_backbone.load_state_dict(checkpoint['model_pos'], strict=True)
     model = model_backbone
     model.eval()
@@ -344,8 +345,16 @@ if __name__ == "__main__":
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
-    video_path = './demo/video/' + args.video
-    video_name = video_path.split('/')[-1].split('.')[0]
+    # Handle both absolute/relative paths and video names
+    if os.path.exists(args.video):
+        video_path = args.video
+    else:
+        video_path = './demo/video/' + args.video
+
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    video_name = os.path.basename(video_path).split('.')[0]
     output_dir = './demo/output/' + video_name + '/'
     get_pose2D(video_path, output_dir)
     get_pose3D(args, video_path, output_dir)
